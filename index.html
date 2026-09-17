@@ -9,6 +9,7 @@
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -457,13 +458,29 @@ function initFirebase(){
 function escucharGrupos(){
   db.ref(DATA_PATH + '/groups').on('value', snap => {
     const val = snap.val();
-    groups = Array.isArray(val) ? val.filter(Boolean) : Object.values(val || {});
-    groups.forEach(g => { g.students = Array.isArray(g.students) ? g.students.filter(Boolean) : Object.values(g.students || {}); });
+    let lista = Array.isArray(val) ? val.filter(Boolean) : Object.values(val || {});
+    lista.forEach(g => { g.students = Array.isArray(g.students) ? g.students.filter(Boolean) : Object.values(g.students || {}); });
+    groups = dedupGrupos(lista);
     reindexarQR();
     renderGradoTabs();
     renderGroupGrid();
     if (state.grupoActualId) { renderScanTop(); renderRoster(); }
   });
+}
+
+// Registro de Calificaciones guarda un grupo por cada trimestre (mismo
+// nombre, distinto id) — normalmente solo uno tiene alumnos capturados.
+// Aquí nos quedamos con un solo salón por nombre+materia: el que tenga
+// más alumnos (el que realmente está en uso), para no mostrar tarjetas
+// duplicadas ni vacías.
+function dedupGrupos(lista){
+  const porNombre = {};
+  lista.forEach(g => {
+    const key = norm(g.name) + '|' + norm(g.subject||'');
+    const actual = porNombre[key];
+    if (!actual || (g.students||[]).length > (actual.students||[]).length) porNombre[key] = g;
+  });
+  return Object.values(porNombre);
 }
 
 function escucharAsistencia(){
@@ -483,11 +500,20 @@ function reindexarQR(){
 
 /* ══════════════════ HELPERS DE GRUPO / GRADO ══════════════════ */
 function gradoDeGrupo(g){
-  const m = String(g.name||'').match(/^(\d)/);
-  return m ? m[1] : '?';
+  const n = String(g.name||'').toUpperCase();
+  if (n.includes('PRIMERO') || /(^|\s)1[°º]?(\s|$)/.test(n)) return '1';
+  if (n.includes('SEGUNDO') || /(^|\s)2[°º]?(\s|$)/.test(n)) return '2';
+  if (n.includes('TERCERO') || /(^|\s)3[°º]?(\s|$)/.test(n)) return '3';
+  if (n.includes('CUARTO')  || /(^|\s)4[°º]?(\s|$)/.test(n)) return '4';
+  if (n.includes('QUINTO')  || /(^|\s)5[°º]?(\s|$)/.test(n)) return '5';
+  if (n.includes('SEXTO')   || /(^|\s)6[°º]?(\s|$)/.test(n)) return '6';
+  return '?';
 }
 function letraDeGrupo(g){
-  const m = String(g.name||'').toUpperCase().match(/[°º]\s*([A-Z])/) || String(g.name||'').toUpperCase().match(/\b([A-Z])\b/);
+  // Captura el bloque de letras después del grado, sea una sola (ej. "1°A",
+  // "PRIMERO C") o varias juntas de un grupo combinado (ej. "PRIMERO ABC").
+  const n = String(g.name||'').toUpperCase();
+  const m = n.match(/(?:PRIMERO|SEGUNDO|TERCERO|CUARTO|QUINTO|SEXTO|[1-6][°º]?)\s*([A-I]{1,6})\b/);
   return m ? m[1] : '';
 }
 function asistKey(gid, fecha){ return gid + '_' + fecha; }
