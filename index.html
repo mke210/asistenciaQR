@@ -664,19 +664,46 @@ function mostrarUltimo(s, estado, motivo){
 /* ══════════════════ CÁMARA + ESCANEO QR ══════════════════ */
 function iniciarCamara(){
   if (state.camActiva) return;
-  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width:{ideal:960}, height:{ideal:960} } })
-    .then(stream => {
-      state.scanStream = stream;
-      const v = document.getElementById('camVideo');
-      v.srcObject = stream;
-      state.camActiva = true;
-      document.getElementById('btnStartCam').style.display = 'none';
-      document.getElementById('btnStopCam').style.display = 'flex';
-      document.getElementById('scanLine').style.display = 'block';
-      document.getElementById('camHint').textContent = 'Buscando código…';
-      cargarDecoder(() => loopEscaneo());
-    })
-    .catch(() => { document.getElementById('camHint').textContent = '⚠️ No se pudo acceder a la cámara'; });
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    document.getElementById('camHint').textContent = '⚠️ Este navegador no permite usar la cámara aquí (¿estás en HTTPS?)';
+    return;
+  }
+  document.getElementById('camHint').textContent = 'Solicitando permiso de cámara…';
+  // Primer intento: cámara trasera, sin forzar resolución (en tablets viejas,
+  // pedir una resolución exacta suele hacer fallar el acceso a la cámara).
+  // Si falla, se intenta de nuevo sin pedir cámara trasera específicamente,
+  // por si el dispositivo no reporta bien sus cámaras.
+  _probarCamara({ video: { facingMode: { ideal: 'environment' } } })
+    .catch(() => _probarCamara({ video: true }))
+    .catch(mostrarErrorCamara);
+}
+function _probarCamara(constraints){
+  return navigator.mediaDevices.getUserMedia(constraints).then(stream => {
+    state.scanStream = stream;
+    const v = document.getElementById('camVideo');
+    v.srcObject = stream;
+    state.camActiva = true;
+    document.getElementById('btnStartCam').style.display = 'none';
+    document.getElementById('btnStopCam').style.display = 'flex';
+    document.getElementById('scanLine').style.display = 'block';
+    document.getElementById('camHint').textContent = 'Buscando código…';
+    cargarDecoder(() => loopEscaneo());
+  });
+}
+function mostrarErrorCamara(err){
+  console.error('[Camara] getUserMedia falló:', err);
+  const nombres = {
+    NotAllowedError: 'Permiso de cámara denegado. Ábrelo en los ajustes del sitio (icono de candado) y actívalo.',
+    PermissionDeniedError: 'Permiso de cámara denegado. Ábrelo en los ajustes del sitio (icono de candado) y actívalo.',
+    NotFoundError: 'No se encontró ninguna cámara en este dispositivo.',
+    NotReadableError: 'La cámara está siendo usada por otra app. Ciérrala e inténtalo de nuevo.',
+    OverconstrainedError: 'La cámara no soporta la configuración solicitada.',
+    SecurityError: 'Bloqueado por seguridad — confirma que la página abre con https://',
+    AbortError: 'Se canceló el acceso a la cámara.',
+  };
+  const nombre = err && err.name;
+  const texto = nombres[nombre] || ('Error de cámara' + (nombre ? ': ' + nombre : '') + (err && err.message ? ' — ' + err.message : ''));
+  document.getElementById('camHint').textContent = '⚠️ ' + texto;
 }
 function detenerCamara(){
   if (state.scanAnim) cancelAnimationFrame(state.scanAnim);
