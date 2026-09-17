@@ -470,17 +470,23 @@ function escucharGrupos(){
 
 // Registro de Calificaciones guarda un grupo por cada trimestre (mismo
 // nombre, distinto id) — normalmente solo uno tiene alumnos capturados.
-// Aquí nos quedamos con un solo salón por nombre+materia: el que tenga
-// más alumnos (el que realmente está en uso), para no mostrar tarjetas
-// duplicadas ni vacías.
+// Para la tarjeta nos quedamos con el que tenga más alumnos (el que
+// realmente está en uso), pero guardamos TODOS los ids hermanos en
+// _idsHermanos: la asistencia se escribe en todos ellos, para que se vea
+// sin importar cuál trimestre tenga seleccionado la app principal en ese
+// momento (ahí es donde realmente busca los registros de hoy).
 function dedupGrupos(lista){
   const porNombre = {};
   lista.forEach(g => {
     const key = norm(g.name) + '|' + norm(g.subject||'');
-    const actual = porNombre[key];
-    if (!actual || (g.students||[]).length > (actual.students||[]).length) porNombre[key] = g;
+    if (!porNombre[key]) porNombre[key] = [];
+    porNombre[key].push(g);
   });
-  return Object.values(porNombre);
+  return Object.values(porNombre).map(variantes => {
+    const ganador = variantes.slice().sort((a,b)=>(b.students||[]).length-(a.students||[]).length)[0];
+    ganador._idsHermanos = variantes.map(v=>v.id);
+    return ganador;
+  });
 }
 
 function escucharAsistencia(){
@@ -516,8 +522,16 @@ function letraDeGrupo(g){
   const m = n.match(/(?:PRIMERO|SEGUNDO|TERCERO|CUARTO|QUINTO|SEXTO|[1-6][°º]?)\s*([A-I]{1,6})\b/);
   return m ? m[1] : '';
 }
+function idsDeGrupo(g){ return (g && g._idsHermanos && g._idsHermanos.length) ? g._idsHermanos : [g.id]; }
 function asistKey(gid, fecha){ return gid + '_' + fecha; }
-function registroDe(gid, fecha){ return asistencia[asistKey(gid, fecha)] || {}; }
+// Combina (fusiona) los registros de asistencia de TODOS los ids hermanos
+// de un grupo para una fecha — así se ve lo marcado sin importar bajo
+// cuál id (trimestre) haya quedado guardado.
+function registroDe(g, fecha){
+  const rec = {};
+  idsDeGrupo(g).forEach(gid => Object.assign(rec, asistencia[asistKey(gid, fecha)] || {}));
+  return rec;
+}
 
 /* ══════════════════ PANTALLA DE INICIO ══════════════════ */
 function setToday(){ state.fecha = hoyISO(); document.getElementById('homeDate').value = state.fecha; renderGroupGrid(); }
@@ -544,7 +558,7 @@ function renderGroupGrid(){
   }
   grid.innerHTML = lista.map(g => {
     const activos = (g.students||[]).filter(s=>!s.inactive).length;
-    const rec = registroDe(g.id, state.fecha);
+    const rec = registroDe(g, state.fecha);
     const tomada = Object.keys(rec).filter(k=>!k.includes('_motivo')).length > 0;
     const grado = gradoDeGrupo(g), letra = letraDeGrupo(g);
     return `<button class="group-card" onclick="abrirGrupo('${g.id}')">
@@ -582,7 +596,7 @@ function renderScanTop(){
 
 function renderTally(){
   const g = grupoActual(); if(!g) return;
-  const rec = registroDe(g.id, state.fecha);
+  const rec = registroDe(g, state.fecha);
   const activos = (g.students||[]).filter(s=>!s.inactive);
   let pre=0,tar=0,aus=0;
   activos.forEach(s => { const st=rec[s.id]; if(st==='presente')pre++; else if(st==='tarde')tar++; else if(st==='ausente')aus++; });
@@ -602,7 +616,7 @@ function bumpTally(id, val){
 /* ══════════════════ LISTA MANUAL ══════════════════ */
 function renderRoster(){
   const g = grupoActual(); if(!g) return;
-  const rec = registroDe(g.id, state.fecha);
+  const rec = registroDe(g, state.fecha);
   const q = norm(document.getElementById('rosterSearch').value);
   let activos = (g.students||[]).filter(s=>!s.inactive);
   document.getElementById('rosterCount').textContent = activos.length + ' alumno' + (activos.length!==1?'s':'');
@@ -624,12 +638,15 @@ function renderRoster(){
 
 function marcarManual(sid, estado, motivo){
   const g = grupoActual(); if(!g) return;
-  const key = asistKey(g.id, state.fecha);
   const updates = { [sid]: estado };
-  const ref = db.ref(DATA_PATH + '/asistencia/' + key);
-  ref.update(updates);
-  if (estado === 'tarde' && motivo) ref.child(sid + '_motivo').set(motivo);
-  else if (estado !== 'tarde') ref.child(sid + '_motivo').remove();
+  // Se escribe en TODOS los ids hermanos (mismo salón, distinto trimestre)
+  // para que se vea sin importar cuál tenga seleccionado la app principal.
+  idsDeGrupo(g).forEach(gid => {
+    const ref = db.ref(DATA_PATH + '/asistencia/' + asistKey(gid, state.fecha));
+    ref.update(updates);
+    if (estado === 'tarde' && motivo) ref.child(sid + '_motivo').set(motivo);
+    else if (estado !== 'tarde') ref.child(sid + '_motivo').remove();
+  });
   marcarActividadReciente();
 
   const row = document.getElementById('rrow_' + sid);
@@ -783,7 +800,7 @@ function onCodigoDetectado(texto){
     return;
   }
 
-  const rec = registroDe(g.id, state.fecha);
+  const rec = registroDe(g, state.fecha);
   if (rec[entry.student.id]){
     flashCam('dup'); sonido('dup'); if(navigator.vibrate) navigator.vibrate(60);
     const estados = {presente:'Ya registrado — Presente ✅', tarde:'Ya registrado — Tardanza ⏰', ausente:'Ya registrado — Ausente ❌'};
