@@ -630,12 +630,24 @@ function marcarManual(sid, estado, motivo){
   ref.update(updates);
   if (estado === 'tarde' && motivo) ref.child(sid + '_motivo').set(motivo);
   else if (estado !== 'tarde') ref.child(sid + '_motivo').remove();
+  marcarActividadReciente();
 
   const row = document.getElementById('rrow_' + sid);
   if (row){ row.classList.remove('just-marked'); void row.offsetWidth; row.classList.add('just-marked'); }
   const s = (g.students||[]).find(x=>x.id===sid);
   sonido(estado==='ausente' ? 'dup' : 'ok');
   mostrarUltimo(s, estado, motivo);
+}
+// Registro de Calificaciones solo aplica los cambios que le llegan de
+// Firebase si traen una marca de tiempo (_savedAt) más nueva que la que ya
+// tiene guardada localmente — es su protección contra pisar datos más
+// recientes. Como esta app nunca la actualizaba, la app principal siempre
+// creía que "ya tenía eso" y descartaba nuestros cambios sin aplicarlos.
+// Por eso, junto con cada asistencia, también actualizamos esa marca (y
+// quién la hizo) — solo esos dos campos, sin tocar groups/asistencia.
+function marcarActividadReciente(){
+  if (!db) return;
+  db.ref(DATA_PATH).update({ _savedAt: Date.now(), _savedBy: 'tablet_asistencia_qr' }).catch(()=>{});
 }
 function pedirMotivo(sid){
   state.motivoParaSid = sid;
