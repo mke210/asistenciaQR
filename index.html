@@ -279,6 +279,12 @@ input,select{font-family:inherit}
 <div id="connDot" class="loading" onclick="toggleConnPanel()">
   <span class="dot"></span><span id="connText">Conectando…</span>
 </div>
+<div id="saveErrorBanner" onclick="this.style.display='none'"
+  style="display:none;position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:950;
+         max-width:min(90vw,520px);background:#3a0d0d;border:1.5px solid var(--red);color:#ffdada;
+         padding:10px 18px;border-radius:12px;font-size:0.82rem;font-weight:600;text-align:center;
+         box-shadow:0 8px 24px rgba(0,0,0,.4);cursor:pointer">
+</div>
 
 <!-- ═══════════ PANTALLA DE INICIO ═══════════ -->
 <div id="screenHome">
@@ -641,19 +647,45 @@ function marcarManual(sid, estado, motivo){
   const updates = { [sid]: estado };
   // Se escribe en TODOS los ids hermanos (mismo salón, distinto trimestre)
   // para que se vea sin importar cuál tenga seleccionado la app principal.
+  const escrituras = [];
   idsDeGrupo(g).forEach(gid => {
     const ref = db.ref(DATA_PATH + '/asistencia/' + asistKey(gid, state.fecha));
-    ref.update(updates);
-    if (estado === 'tarde' && motivo) ref.child(sid + '_motivo').set(motivo);
-    else if (estado !== 'tarde') ref.child(sid + '_motivo').remove();
+    escrituras.push(ref.update(updates));
+    if (estado === 'tarde' && motivo) escrituras.push(ref.child(sid + '_motivo').set(motivo));
+    else if (estado !== 'tarde') escrituras.push(ref.child(sid + '_motivo').remove());
   });
-  marcarActividadReciente();
+  escrituras.push(marcarActividadReciente());
 
   const row = document.getElementById('rrow_' + sid);
   if (row){ row.classList.remove('just-marked'); void row.offsetWidth; row.classList.add('just-marked'); }
   const s = (g.students||[]).find(x=>x.id===sid);
   sonido(estado==='ausente' ? 'dup' : 'ok');
-  mostrarUltimo(s, estado, motivo);
+  mostrarUltimo(s, estado, motivo, 'guardando');
+
+  // IMPORTANTE: antes esto no se revisaba — si Firebase rechazaba el
+  // guardado (permiso, sin red, etc.) la app igual mostraba "✅ listo" sin
+  // que el dato realmente hubiera llegado. Ahora se confirma de verdad.
+  Promise.all(escrituras).then(() => {
+    mostrarUltimo(s, estado, motivo, 'ok');
+    ocultarBannerError();
+  }).catch(err => {
+    console.error('[Asistencia] Falló el guardado en Firebase:', err);
+    sonido('err');
+    if (navigator.vibrate) navigator.vibrate([80,60,80]);
+    mostrarUltimo(s, estado, motivo, 'error', err);
+    mostrarBannerError(s ? s.name : '', err);
+  });
+}
+function mostrarBannerError(nombre, err){
+  const b = document.getElementById('saveErrorBanner');
+  if (!b) return;
+  const detalle = err && (err.code || err.message) ? (err.code || err.message) : 'sin conexión con Firebase';
+  b.textContent = `⚠️ NO se guardó la asistencia de ${nombre || 'un alumno'} — ${detalle}. Toca para cerrar.`;
+  b.style.display = 'block';
+}
+function ocultarBannerError(){
+  const b = document.getElementById('saveErrorBanner');
+  if (b) b.style.display = 'none';
 }
 // Registro de Calificaciones solo aplica los cambios que le llegan de
 // Firebase si traen una marca de tiempo (_savedAt) más nueva que la que ya
@@ -663,8 +695,8 @@ function marcarManual(sid, estado, motivo){
 // Por eso, junto con cada asistencia, también actualizamos esa marca (y
 // quién la hizo) — solo esos dos campos, sin tocar groups/asistencia.
 function marcarActividadReciente(){
-  if (!db) return;
-  db.ref(DATA_PATH).update({ _savedAt: Date.now(), _savedBy: 'tablet_asistencia_qr' }).catch(()=>{});
+  if (!db) return Promise.resolve();
+  return db.ref(DATA_PATH).update({ _savedAt: Date.now(), _savedBy: 'tablet_asistencia_qr' });
 }
 function pedirMotivo(sid){
   state.motivoParaSid = sid;
@@ -680,13 +712,19 @@ function confirmarMotivo(){
   if (sid) marcarManual(sid, 'tarde', motivo);
 }
 
-function mostrarUltimo(s, estado, motivo){
+function mostrarUltimo(s, estado, motivo, sync, err){
   const card = document.getElementById('lastCard');
   const iconos = {presente:'✅', tarde:'⏰', ausente:'❌'};
   const textos = {presente:'Presente', tarde:'Tardanza'+(motivo?' — '+motivo:''), ausente:'Ausente'};
   document.getElementById('lastIc').textContent = iconos[estado]||'—';
   document.getElementById('lastNm').textContent = s ? s.name : '—';
-  document.getElementById('lastDt').textContent = textos[estado]||'';
+  let sub = textos[estado]||'';
+  if (sync === 'guardando') sub += ' · ⏳ Guardando…';
+  else if (sync === 'ok') sub += ' · ☁️ Guardado';
+  else if (sync === 'error') sub = '⚠️ NO SE GUARDÓ — ' + (err && (err.code || err.message) ? (err.code || err.message) : 'sin conexión con Firebase');
+  document.getElementById('lastDt').textContent = sub;
+  document.getElementById('lastDt').style.color = sync === 'error' ? 'var(--red)' : '';
+  document.getElementById('lastDt').style.fontWeight = sync === 'error' ? '700' : '';
   card.classList.remove('show'); void card.offsetWidth; card.classList.add('show');
 }
 
