@@ -562,6 +562,7 @@ function dedupGrupos(lista){
   return Object.values(porNombre).map(variantes => {
     const ganador = variantes.slice().sort((a,b)=>(b.students||[]).length-(a.students||[]).length)[0];
     ganador._idsHermanos = variantes.map(v=>v.id);
+    ganador._hermanos = variantes;   // grupos completos (cada trimestre tiene su propia copia del alumno)
     return ganador;
   });
 }
@@ -673,9 +674,41 @@ function asistKey(gid, fecha){ return gid + '_' + fecha; }
 // Combina (fusiona) los registros de asistencia de TODOS los ids hermanos
 // de un grupo para una fecha — así se ve lo marcado sin importar bajo
 // cuál id (trimestre) haya quedado guardado.
+// ── Copias del alumno entre trimestres ──
+// El Registro guarda en cada trimestre su PROPIA copia del alumno, con otro
+// id interno (mismo código QR y nombre). Antes la tablet escribía el id del
+// alumno de un solo trimestre en todos los trimestres, y el Registro, al ver
+// otro trimestre, no lo encontraba: por eso "la asistencia no llegaba".
+function _qrN(s){ return s && s.qrCode ? norm(s.qrCode) : ''; }
+function _nmN(s){ return String((s&&s.name)||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toLowerCase(); }
+function hermanosDe(g){ return (g && g._hermanos && g._hermanos.length) ? g._hermanos : [g]; }
+// Devuelve el id que tiene ESTE alumno dentro del grupo/trimestre gh
+function idEnGrupo(gh, s){
+  if (!gh || !s) return null;
+  const lista = gh.students || [];
+  if (lista.some(x => x.id === s.id)) return s.id;
+  const q = _qrN(s), n = _nmN(s);
+  const m = (q && lista.find(x => _qrN(x) === q)) || lista.find(x => _nmN(x) === n);
+  return m ? m.id : null;
+}
+// Registro del día con los ids del grupo mostrado (g), juntando lo marcado en
+// cualquier trimestre hermano, sin importar con qué id se guardó.
 function registroDe(g, fecha){
   const rec = {};
-  idsDeGrupo(g).forEach(gid => Object.assign(rec, asistencia[asistKey(gid, fecha)] || {}));
+  const porId = {};
+  hermanosDe(g).forEach(gh => (gh.students||[]).forEach(x => { porId[x.id] = x; }));
+  hermanosDe(g).forEach(gh => {
+    const dia = asistencia[asistKey(gh.id, fecha)] || {};
+    Object.keys(dia).forEach(k => {
+      if (k.endsWith('_motivo')) return;
+      const alumno = porId[k]; if (!alumno) return;
+      const destino = idEnGrupo(g, alumno); if (!destino) return;
+      if (rec[destino] === undefined || gh.id === g.id) {
+        rec[destino] = dia[k];
+        if (dia[k + '_motivo'] !== undefined) rec[destino + '_motivo'] = dia[k + '_motivo'];
+      }
+    });
+  });
   return rec;
 }
 
@@ -784,15 +817,17 @@ function renderRoster(){
 
 function marcarManual(sid, estado, motivo){
   const g = grupoActual(); if(!g) return;
-  const updates = { [sid]: estado };
-  // Se escribe en TODOS los ids hermanos (mismo salón, distinto trimestre)
-  // para que se vea sin importar cuál tenga seleccionado la app principal.
+  // Se escribe en TODOS los trimestres hermanos (mismo salón) para que se vea
+  // sin importar cuál tenga seleccionado el Registro — y en cada uno con el id
+  // que ESE trimestre le da al alumno (cada trimestre tiene su propia copia).
+  const alumno = (g.students||[]).find(x=>x.id===sid);
   const escrituras = [];
-  idsDeGrupo(g).forEach(gid => {
-    const ref = db.ref(DATA_PATH + '/asistencia/' + asistKey(gid, state.fecha));
-    escrituras.push(ref.update(updates));
-    if (estado === 'tarde' && motivo) escrituras.push(ref.child(sid + '_motivo').set(motivo));
-    else if (estado !== 'tarde') escrituras.push(ref.child(sid + '_motivo').remove());
+  hermanosDe(g).forEach(gh => {
+    const sidH = idEnGrupo(gh, alumno) || (gh.id === g.id ? sid : null);
+    if (!sidH) return;   // ese trimestre no tiene a este alumno
+    const ref = db.ref(DATA_PATH + '/asistencia/' + asistKey(gh.id, state.fecha));
+    const upd = { [sidH]: estado, [sidH + '_motivo']: (estado === 'tarde' && motivo) ? motivo : null };
+    escrituras.push(ref.update(upd));
   });
   escrituras.push(marcarActividadReciente());
 
