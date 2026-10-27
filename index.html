@@ -869,10 +869,10 @@ function ocultarBannerError(){
 // creía que "ya tenía eso" y descartaba nuestros cambios sin aplicarlos.
 // Por eso, junto con cada asistencia, también actualizamos esa marca (y
 // quién la hizo) — solo esos dos campos, sin tocar groups/asistencia.
-function marcarActividadReciente(){
-  if (!db) return Promise.resolve();
-  return db.ref(DATA_PATH).update({ _savedAt: Date.now(), _savedBy: 'tablet_asistencia_qr' });
-}
+// YA NO se modifica _savedAt/_savedBy: el Registro escucha la asistencia por
+// su propia ruta. Cambiar esa marca hacía creer al Registro que había datos
+// nuevos y reemplazaba las calificaciones recién capturadas (no subidas).
+function marcarActividadReciente(){ return Promise.resolve(); }
 function pedirMotivo(sid){
   state.motivoParaSid = sid;
   document.getElementById('motivoInput').value = '';
