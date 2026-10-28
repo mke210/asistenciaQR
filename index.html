@@ -452,6 +452,9 @@ let db = null;
 let authRef = null;       // Firebase Auth (correo y contraseña)
 let groups = [];          // arreglo de grupos leídos de Firebase (solo lectura)
 let asistencia = {};       // nodo completo de asistencia (solo lectura, en vivo)
+// (declaradas antes de "state", que ya usa hoyISO() al arrancar)
+let _serverOffset = 0;          // diferencia (ms) entre el reloj de la tablet y el de Firebase
+let _fechaManual = false;       // true si el maestro eligió otra fecha a propósito
 let qrIndex = {};          // codigoQR normalizado -> {student, group}
 let state = {
   fecha: hoyISO(),
@@ -466,7 +469,39 @@ let state = {
   motivoParaSid: null,
 };
 
-function hoyISO(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+// ── Fecha de HOY, tomada de la hora de Firebase y en horario de México ──
+// Antes se usaba el reloj de la tablet: si estaba desajustado, la asistencia
+// se guardaba en OTRA fecha y en el Registro aparecía "sin marcar".
+function _ahora(){ return Date.now() + _serverOffset; }
+function hoyISO(){
+  const d = new Date(_ahora());
+  try {
+    // 'en-CA' da el formato AAAA-MM-DD
+    return new Intl.DateTimeFormat('en-CA', { timeZone:'America/Mexico_City', year:'numeric', month:'2-digit', day:'2-digit' }).format(d);
+  } catch(e) {
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  }
+}
+function _avisoFecha(){
+  let el = document.getElementById('fechaAviso');
+  if (!el){
+    el = document.createElement('div'); el.id = 'fechaAviso';
+    el.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:9999;padding:10px 14px;font:600 14px system-ui,sans-serif;text-align:center;display:none;cursor:pointer';
+    el.onclick = () => { if (state.fecha !== hoyISO()) setToday(); };
+    document.body.appendChild(el);
+  }
+  const relojMal = Math.abs(_serverOffset) > 5*60*1000;
+  if (state.fecha !== hoyISO()){
+    const d = new Date(state.fecha+'T12:00');
+    el.style.background = '#c0392b'; el.style.color = '#fff';
+    el.textContent = '⚠️ Estás pasando lista del ' + d.toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long'}) + ', NO de hoy. Toca aquí para volver a HOY.';
+    el.style.display = 'block';
+  } else if (relojMal){
+    el.style.background = '#f39c12'; el.style.color = '#1a1a1a';
+    el.textContent = '🕒 El reloj de esta tablet está desajustado (' + Math.round(_serverOffset/60000) + ' min). La app usa la fecha correcta de internet.';
+    el.style.display = 'block';
+  } else el.style.display = 'none';
+}
 function escHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function norm(s){ return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().trim(); }
 
@@ -516,6 +551,13 @@ function initFirebase(){
             db = firebase.database();
             escucharGrupos();
             escucharAsistencia();
+            // Hora real de Firebase: corrige la fecha aunque el reloj de la tablet esté mal
+            db.ref('.info/serverTimeOffset').on('value', snap => {
+              _serverOffset = Number(snap.val()) || 0;
+              if (!_fechaManual) setToday(); else _avisoFecha();
+            });
+            // Si la app queda abierta de un día para otro, cambiar a la fecha nueva sola
+            setInterval(() => { if (!_fechaManual && state.fecha !== hoyISO()) setToday(); else _avisoFecha(); }, 60000);
             db.ref('.info/connected').on('value', snap => {
               setConn(snap.val() ? 'ok' : 'err', snap.val() ? 'En vivo' : 'Sin conexión');
             });
@@ -713,8 +755,8 @@ function registroDe(g, fecha){
 }
 
 /* ══════════════════ PANTALLA DE INICIO ══════════════════ */
-function setToday(){ state.fecha = hoyISO(); document.getElementById('homeDate').value = state.fecha; renderGroupGrid(); }
-function onDateChange(){ state.fecha = document.getElementById('homeDate').value || hoyISO(); renderGroupGrid(); }
+function setToday(){ _fechaManual = false; state.fecha = hoyISO(); document.getElementById('homeDate').value = state.fecha; renderGroupGrid(); if (state.grupoActualId){ renderScanTop(); renderRoster(); } _avisoFecha(); }
+function onDateChange(){ state.fecha = document.getElementById('homeDate').value || hoyISO(); _fechaManual = state.fecha !== hoyISO(); renderGroupGrid(); _avisoFecha(); }
 
 function renderGradoTabs(){
   const grados = [...new Set(groups.map(gradoDeGrupo))].sort();
